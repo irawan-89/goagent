@@ -76,6 +76,7 @@ import string
 import hashlib
 import threading
 import thread
+import thread
 import socket
 import ssl
 import select
@@ -1548,7 +1549,7 @@ class Common(object):
             for host in need_resolve_remote:
                 for dnsserver in self.DNS_SERVERS:
                     logging.debug('resolve remote host=%r from dnsserver=%r', host, dnsserver)
-                    threading._start_new_thread(do_resolve, (host, [dnsserver], result_queue))
+                    thread.start_new_thread(do_resolve, (host, [dnsserver], result_queue))
             for _ in xrange(len(self.DNS_SERVERS) * len(need_resolve_remote)):
                 try:
                     host, dnsservers, iplist = result_queue.get(timeout=2)
