@@ -712,7 +712,8 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         """strip ssl"""
         certfile = CertUtil.get_cert(self.host)
         logging.info('%s "STRIPSSL %s %s:%d %s" - -', self.address_string(), self.command, self.host, self.port, self.protocol_version)
-        self.wfile.write(b'HTTP/1.1 200 OK\r\n\r\n')
+        self.send_response(200)
+        self.end_headers()
         try:
             ssl_sock = ssl.wrap_socket(self.connection, keyfile=certfile, certfile=certfile, server_side=True)
         except Exception as e:
@@ -799,7 +800,7 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         headers = {k.title(): v for k, v in self.headers.items()}
         body = self.rfile.read(int(headers.get('Content-Length', 0)))
         response = self.create_http_request(method, url, headers, body, timeout=self.connect_timeout, **kwargs)
-        logging.info('%s "DIRECT %s %s HTTP/1.1" %s %s', self.address_string(), self.command, url, response.status, response.getheader('Content-Length', '-'))
+        logging.info('%s "DIRECT %s %s %s" %s %s', self.address_string(), self.command, url, self.protocol_version, response.status, response.getheader('Content-Length', '-'))
         response_headers = {k.title(): v for k, v in response.getheaders()}
         if 'Set-Cookie' in response_headers:
             response_headers['Set-Cookie'] = self.normcookie(response_headers['Set-Cookie'])
@@ -809,19 +810,21 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             self.send_header(key, value)
         self.end_headers()
         need_chunked = 'Transfer-Encoding' in response_headers
-        while True:
-            data = response.read(8192)
-            if not data:
+        try:
+            while True:
+                data = response.read(8192)
+                if not data:
+                    if need_chunked:
+                        self.wfile.write('0\r\n\r\n')
+                    break
                 if need_chunked:
-                    self.wfile.write('0\r\n\r\n')
-                break
-            if need_chunked:
-                self.wfile.write('%x\r\n' % len(data))
-            self.wfile.write(data)
-            if need_chunked:
-                self.wfile.write('\r\n')
-            del data
-        response.close()
+                    self.wfile.write('%x\r\n' % len(data))
+                self.wfile.write(data)
+                if need_chunked:
+                    self.wfile.write('\r\n')
+                del data
+        finally:
+            response.close()
 
     def URLFETCH(self, fetchservers, max_retry=2, kwargs={}):
         """urlfetch from fetchserver"""
@@ -843,14 +846,16 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                 if response.app_status == 503:
                     fetchserver = random.choice(fetchservers)
                     logging.info('Current APPID Over Quota, trying another fetchserver=%r', fetchserver)
+                    response.close()
                     continue
                 if response.app_status == 500:
                     fetchserver = random.choice(fetchservers)
                     logging.warning('500 with range in query, trying another fetchserver=%r', fetchserver)
+                    response.close()
                     continue
                 # first response, has no retry.
                 if not headers_sent:
-                    logging.info('%s "URLFETCH %s %s HTTP/1.1" %s %s', self.address_string(), method, url, response.status, response.getheader('Content-Length', '-'))
+                    logging.info('%s "URLFETCH %s %s %s" %s %s', self.address_string(), method, url, self.protocol_version, response.status, response.getheader('Content-Length', '-'))
                     if response.status == 206:
                         return RangeFetch(self, response, fetchservers, **kwargs).fetch()
                     if response.getheader('Set-Cookie'):
@@ -893,7 +898,10 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                     return
             except Exception as e:
                 errors.append(e)
-                logging.exception('URLFETCH fetchserver=%r %r, retry...', fetchserver, e)
+                logging.info('URLFETCH fetchserver=%r %r, retry...', fetchserver, e)
+            finally:
+                if response:
+                    response.close()
         if len(errors) == max_retry:
             content = message_html('502 URLFetch failed', 'Local URLFetch %r failed' % url, str(errors))
             return self.MOCK(502, {'Content-Type': 'text/html'}, content)
@@ -1144,6 +1152,8 @@ class AdvancedProxyHandler(SimpleProxyHandler):
                 ctime, sock = self.tcp_connection_cache[cache_key].get_nowait()
                 if time.time() - ctime < 30:
                     return sock
+                else:
+                    sock.close()
         except Queue.Empty:
             pass
         result = None
@@ -1296,6 +1306,8 @@ class AdvancedProxyHandler(SimpleProxyHandler):
                 ctime, sock = self.ssl_connection_cache[cache_key].get_nowait()
                 if time.time() - ctime < 30:
                     return sock
+                else:
+                    sock.close()
         except Queue.Empty:
             pass
         result = None
@@ -1313,7 +1325,7 @@ class AdvancedProxyHandler(SimpleProxyHandler):
                 if not isinstance(result, Exception):
                     thread.start_new_thread(close_connection, (len(addrs)-i-1, queobj, result.tcp_time, result.ssl_time))
                     if i > 0:
-                        logging.warning('create_ssl_connection to %s return OK.', addrs)
+                        logging.info('create_ssl_connection to %s return OK.', addrs)
                     return result
                 else:
                     if i == 0:
