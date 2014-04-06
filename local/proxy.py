@@ -2205,12 +2205,12 @@ class GAEFetchFilter(BaseProxyHandlerFilter):
             return [handler.URLFETCH, fetchservers, 2, kwargs]
 
 
-class GAEProxyHandler2(AdvancedProxyHandler):
+class GAEProxyHandler(AdvancedProxyHandler):
     """GAE Proxy Handler 2"""
     handler_filters = [WithGAEFilter(), FakeHttpsFilter(), ForceHttpsFilter(), HostsFilter(), AutoRangeFilter(), GAEFetchFilter()]
 
     def first_run(self):
-        """GAEProxyHandler2 setup, init domain/iplist map"""
+        """GAEProxyHandler setup, init domain/iplist map"""
         if not common.PROXY_ENABLE:
             logging.info('resolve common.IPLIST_MAP names=%s to iplist', list(common.IPLIST_MAP))
             common.resolve_iplist()
@@ -2305,7 +2305,7 @@ class PHPFetchFilter(BaseProxyHandlerFilter):
             return [handler.URLFETCH, [common.PHP_FETCHSERVER], 1, kwargs]
 
 
-class PHPProxyHandler2(AdvancedProxyHandler):
+class PHPProxyHandler(AdvancedProxyHandler):
     """PHP Proxy Handler 2"""
     first_run_lock = threading.Lock()
     handler_filters = [FakeHttpsFilter(), ForceHttpsFilter(), PHPFetchFilter()]
@@ -2367,11 +2367,27 @@ class PHPProxyHandler2(AdvancedProxyHandler):
         return response
 
 
-class ProxyChainGAEProxyHandler(ProxyChainMixin, GAEProxyHandler2):
+class ProxyChainGAEProxyHandler(ProxyChainMixin, GAEProxyHandler):
     pass
 
 
-class ProxyChainPHPProxyHandler(ProxyChainMixin, PHPProxyHandler2):
+class ProxyChainPHPProxyHandler(ProxyChainMixin, PHPProxyHandler):
+    pass
+
+
+class GreenForwardGAEProxyHandler(GreenForwardMixin, GAEProxyHandler):
+    pass
+
+
+class GreenForwardPHPProxyHandler(GreenForwardMixin, PHPProxyHandler):
+    pass
+
+
+class ProxyChainGreenForwardGAEProxyHandler(ProxyChainMixin, GreenForwardGAEProxyHandler):
+    pass
+
+
+class ProxyChainGreenForwardPHPProxyHandler(ProxyChainMixin, GreenForwardPHPProxyHandler):
     pass
 
 
@@ -2543,6 +2559,8 @@ def pre_start():
             m = re.search(r'(?im)(BogoMIPS|cpu MHz)\s+:\s+([\d\.]+)', fp.read())
             if m and float(m.group(2)) < 1000:
                 logging.warning("*NOTE*, Please set [gae]window=2")
+    if common.GAE_WINDOW != 4:
+        GAEProxyHandler.max_window = common.GAE_WINDOW
     if common.GAE_APPIDS[0] == 'goagent':
         logging.critical('please edit %s to add your appid to [gae] !', common.CONFIG_FILENAME)
         sys.exit(-1)
@@ -2563,8 +2581,6 @@ def pre_start():
         any(common.DNS_SERVERS.insert(0, x) for x in [y for y in get_dnsserver_list() if y not in common.DNS_SERVERS])
     if not OpenSSL:
         logging.warning('python-openssl not found, please install it!')
-    if 'uvent.loop' in sys.modules and isinstance(gevent.get_hub().loop, __import__('uvent').loop.UVLoop):
-        logging.info('Uvent enabled, patch forward_socket')
 
 
 def main():
@@ -2578,9 +2594,11 @@ def main():
     CertUtil.check_ca()
     sys.stdout.write(common.info())
 
+    uvent_enabled = 'uvent.loop' in sys.modules and isinstance(gevent.get_hub().loop, __import__('uvent').loop.UVLoop)
+
     if common.PHP_ENABLE:
         host, port = common.PHP_LISTEN.split(':')
-        HandlerClass = PHPProxyHandler2 if not common.PROXY_ENABLE else ProxyChainPHPProxyHandler
+        HandlerClass = ((PHPProxyHandler, GreenForwardPHPProxyHandler) if not common.PROXY_ENABLE else (ProxyChainPHPProxyHandler, ProxyChainGreenForwardPHPProxyHandler))[uvent_enabled]
         server = LocalProxyServer((host, int(port)), HandlerClass)
         thread.start_new_thread(server.serve_forever, tuple())
 
@@ -2599,7 +2617,7 @@ def main():
             logging.exception('GoAgent DNSServer requires dnslib and gevent 1.0')
             sys.exit(-1)
 
-    HandlerClass = GAEProxyHandler2 if not common.PROXY_ENABLE else ProxyChainGAEProxyHandler
+    HandlerClass = ((GAEProxyHandler, GreenForwardGAEProxyHandler) if not common.PROXY_ENABLE else (ProxyChainGAEProxyHandler, ProxyChainGreenForwardGAEProxyHandler))[uvent_enabled]
     server = LocalProxyServer((common.LISTEN_IP, common.LISTEN_PORT), HandlerClass)
     try:
         server.serve_forever()
