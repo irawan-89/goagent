@@ -927,7 +927,7 @@ class RangeFetch(object):
     bufsize = 8192
     waitsize = 1024*512
 
-    def __init__(self, handler, response, fetchservers, password):
+    def __init__(self, handler, response, fetchservers, password=''):
         self.handler = handler
         self.url = self.handler.url
         self.response = response
@@ -1003,7 +1003,7 @@ class RangeFetch(object):
         self._stopped = True
 
     def __fetchlet(self, range_queue, data_queue, range_delay_size):
-        headers = dict((k.title(), v) for k, v in self.headers.items())
+        headers = dict((k.title(), v) for k, v in self.handler.headers.items())
         headers['Connection'] = 'close'
         while 1:
             try:
@@ -2456,7 +2456,9 @@ class BlackholeFilter(BaseProxyHandlerFilter):
 
     def filter(self, handler):
         urlparts = urlparse.urlsplit(handler.path)
-        if handler.path.startswith(('http', 'https')):
+        if handler.command == 'CONNECT':
+            return [handler.STRIPSSL]
+        elif handler.path.startswith(('http', 'https')):
             headers = {'Cache-Control': 'max-age=86400', 'Expires': 'Oct, 01 Aug 2100 00:00:00 GMT', 'Connection': 'close'}
             content = ''
             if urlparts.path.endswith(('.jpg', '.gif', '.jpeg', '.bmp')):
