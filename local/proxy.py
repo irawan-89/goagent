@@ -1780,8 +1780,8 @@ class RangeFetch2(object):
 
     def __init__(self, handler, response, fetchservers, password, maxsize=0, bufsize=0, waitsize=0, threads=0):
         self.handler = handler
+        self.url = self.handler.url
         self.response = response
-        self.payload = payload
         self.fetchservers = fetchservers
         self.password = password
         self.maxsize = maxsize or self.__class__.maxsize
@@ -1849,7 +1849,7 @@ class RangeFetch2(object):
                 logging.error('data_queue peek timeout, break')
                 break
             try:
-                self.wfile.write(data)
+                self.handler.wfile.write(data)
                 self.expect_begin += len(data)
                 del data
             except Exception as e:
@@ -1876,7 +1876,7 @@ class RangeFetch2(object):
                         fetchserver = random.choice(self.fetchservers)
                         if self._last_app_status.get(fetchserver, 200) >= 500:
                             time.sleep(5)
-                        response = self.create_http_request_withserver(fetchserver, self.command, self.url, headers, self.handler.body, password=self.password)
+                        response = self.handler.create_http_request_withserver(fetchserver, self.handler.command, self.url, headers, self.handler.body, password=self.password)
                 except Queue.Empty:
                     continue
                 except Exception as e:
@@ -1890,7 +1890,7 @@ class RangeFetch2(object):
                 if fetchserver:
                     self._last_app_status[fetchserver] = response.app_status
                 if response.app_status != 200:
-                    logging.warning('Range Fetch "%s %s" %s return %s', self.command, self.url, headers['Range'], response.app_status)
+                    logging.warning('Range Fetch "%s %s" %s return %s', self.handler.command, self.url, headers['Range'], response.app_status)
                     response.close()
                     range_queue.put((start, end, None))
                     continue
@@ -1903,7 +1903,7 @@ class RangeFetch2(object):
                 if 200 <= response.status < 300:
                     content_range = response.getheader('Content-Range')
                     if not content_range:
-                        logging.warning('RangeFetch "%s %s" return Content-Range=%r: response headers=%r', self.command, self.url, content_range, response.getheaders())
+                        logging.warning('RangeFetch "%s %s" return Content-Range=%r: response headers=%r', self.handler.command, self.url, content_range, response.getheaders())
                         response.close()
                         range_queue.put((start, end, None))
                         continue
@@ -1920,10 +1920,10 @@ class RangeFetch2(object):
                             data_queue.put((start, data))
                             start += len(data)
                         except Exception as e:
-                            logging.warning('RangeFetch "%s %s" %s failed: %s', self.command, self.url, headers['Range'], e)
+                            logging.warning('RangeFetch "%s %s" %s failed: %s', self.handler.command, self.url, headers['Range'], e)
                             break
                     if start < end + 1:
-                        logging.warning('RangeFetch "%s %s" retry %s-%s', self.command, self.url, start, end)
+                        logging.warning('RangeFetch "%s %s" retry %s-%s', self.handler.command, self.url, start, end)
                         response.close()
                         range_queue.put((start, end, None))
                         continue
