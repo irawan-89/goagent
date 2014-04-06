@@ -893,7 +893,8 @@ class SimpleProxyHandlerFilter(BaseProxyHandlerFilter):
 class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     """SimpleProxyHandler for GoAgent 3.x"""
 
-    protocol_version = 'HTTP/1.0'
+    protocol_version = 'HTTP/1.1'
+    scheme = 'http'
     skip_headers = frozenset(['Vary', 'Via', 'X-Forwarded-For', 'Proxy-Authorization', 'Proxy-Connection', 'Upgrade', 'X-Chrome-Variations', 'Connection', 'Cache-Control'])
     normcookie = functools.partial(re.compile(', ([^ =]+(?:=|$))').sub, '\\r\\nSet-Cookie: \\1')
     normattachment = functools.partial(re.compile(r'filename=([^"\']+)').sub, 'filename="\\1"')
@@ -1012,9 +1013,7 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         except NetWorkIOError as e:
             if e.args[0] not in (errno.ECONNABORTED, errno.ECONNRESET, errno.EPIPE):
                 raise
-        if self.path[0] == '/':
-            netloc = self.headers.get('Host') or '%s:%s' % (self.host, self.port)
-            self.path = 'https://%s%s' % (netloc, self.path)
+        self.scheme = 'https'
         try:
             self.do_METHOD()
         except NetWorkIOError as e:
@@ -1030,7 +1029,9 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         else:
             remote = self.create_tcp_connection(hostname, port, timeout, **kwargs)
         if remote and not isinstance(remote, Exception):
-            self.wfile.write(b'HTTP/1.1 200 OK\r\n\r\n')
+            self.send_response(200)
+            self.send_header('Connection', 'close')
+            self.end_headers()
         logging.info('%s "FORWARD %s %s:%d %s" - -', self.address_string(), self.command, hostname, port, self.protocol_version)
         try:
             tick = 1
@@ -1103,7 +1104,7 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         if self.path.startswith(('http://', 'https://', 'ftp://')):
             url = self.path
         else:
-            url = 'http://%s%s' % (self.headers['Host'], self.path)
+            url = '%s://%s%s' % (self.scheme, self.headers['Host'], self.path)
         headers = {k.title(): v for k, v in self.headers.items()}
         body = self.body
         response = None
@@ -1163,7 +1164,7 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                         response.close()
                         return
             except NetWorkIOError as e:
-                if e[0] in (errno.ECONNABORTED, errno.EPIPE) or 'bad write retry' in error.args[1]:
+                if e[0] in (errno.ECONNABORTED, errno.EPIPE) or 'bad write retry' in e.args[1]:
                     return
             except Exception as e:
                 errors.append(e)
@@ -1173,14 +1174,20 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             return self.MOCK(502, {'Content-Type': 'text/html'}, content)
 
     def do_METHOD(self):
-        netloc = self.headers.get('Host') or urlparse.urlsplit(self.path).netloc if self.command != 'CONNECT' else self.path
+        if self.command == 'CONNECT':
+            netloc = self.path
+        elif self.path[0] == '/':
+            netloc = self.headers.get('Host', 'localhost')
+            self.path = '%s://%s%s' % (self.scheme, netloc, self.path)
+        else:
+            netloc = urlparse.urlsplit(self.path).netloc
         m = re.match(r'^(.+):(\d+)$', netloc)
         if m:
             self.host = m.group(1).strip('[]')
             self.port = int(m.group(2))
         else:
             self.host = netloc
-            self.port = 80
+            self.port = 443 if self.scheme == 'http' else 80
         self.body = self.rfile.read(int(self.headers['Content-Length'])) if 'Content-Length' in self.headers else ''
         for handler_filter in self.handler_filters:
             action = handler_filter.filter(self)
@@ -1485,8 +1492,10 @@ class AdvancedProxyHandler(SimpleProxyHandler):
             while cache_key:
                 ctime, sock = self.tcp_connection_cache[cache_key].get_nowait()
                 if time.time() - ctime < 30:
+                    print ('hit !',hostname, port, cache_key)
                     return sock
         except Queue.Empty:
+            print ('miss !',hostname, port, cache_key)
             pass
         result = None
         addresses = [(x, port) for x in self.gethostbyname2(hostname)]
@@ -2082,7 +2091,8 @@ class ForceHttpsFilter(BaseProxyHandlerFilter):
     def filter(self, handler):
         if handler.command != 'CONNECT' and handler.host in common.HTTP_FORCEHTTPS and not handler.headers.get('Referer', '').startswith('https://') and not handler.path.startswith('https://'):
             logging.debug('ForceHttpsFilter metched %r %r', handler.path, handler.headers)
-            return [handler.MOCK, 301, {'Location': handler.path.replace('http://', 'https://', 1)}, '']
+            headers = {'Location': handler.path.replace('http://', 'https://', 1), 'Connection': 'close'}
+            return [handler.MOCK, 301, headers, '']
 
 
 class FakeHttpsFilter(BaseProxyHandlerFilter):
