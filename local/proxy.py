@@ -624,6 +624,7 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     normattachment = functools.partial(re.compile(r'filename=([^"\']+)').sub, 'filename="\\1"')
     bufsize = 256 * 1024
     max_timeout = 16
+    connect_timeout = 8
     first_run_lock = threading.Lock()
     handler_filters = [SimpleProxyHandlerFilter()]
 
@@ -797,7 +798,7 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             url = 'http://%s%s' % (self.headers['Host'], self.path)
         headers = {k.title(): v for k, v in self.headers.items()}
         body = self.rfile.read(int(headers.get('Content-Length', 0)))
-        response = self.create_http_request(method, url, headers, body, timeout=self.max_timeout, **kwargs)
+        response = self.create_http_request(method, url, headers, body, timeout=self.connect_timeout, **kwargs)
         logging.info('%s "DIRECT %s %s HTTP/1.1" %s %s', self.address_string(), self.command, url, response.status, response.getheader('Content-Length', '-'))
         response_headers = {k.title(): v for k, v in response.getheaders()}
         if 'Set-Cookie' in response_headers:
@@ -1193,7 +1194,7 @@ class AdvancedProxyHandler(SimpleProxyHandler):
                     ssl_sock = ssl.wrap_socket(sock, do_handshake_on_connect=False)
                 else:
                     ssl_sock = ssl.wrap_socket(sock, cert_reqs=ssl.CERT_REQUIRED, ca_certs=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cacert.pem'), do_handshake_on_connect=False)
-                ssl_sock.settimeout(timeout or self.max_timeout)
+                ssl_sock.settimeout(timeout or self.connect_timeout)
                 # start connection time record
                 start_time = time.time()
                 # TCP connect
@@ -1221,7 +1222,7 @@ class AdvancedProxyHandler(SimpleProxyHandler):
                 # any socket.error, put Excpetions to output queobj.
                 queobj.put(e)
                 # reset a large and random timeout to the ipaddr
-                self.ssl_connection_time[ipaddr] = self.max_timeout + random.random()
+                self.ssl_connection_time[ipaddr] = self.connect_timeout + random.random()
                 # close ssl socket
                 if ssl_sock:
                     ssl_sock.close()
@@ -1311,6 +1312,8 @@ class AdvancedProxyHandler(SimpleProxyHandler):
                 result = queobj.get()
                 if not isinstance(result, Exception):
                     thread.start_new_thread(close_connection, (len(addrs)-i-1, queobj, result.tcp_time, result.ssl_time))
+                    if i > 0:
+                        logging.warning('create_ssl_connection to %s return OK.', addrs)
                     return result
                 else:
                     if i == 0:
@@ -1915,7 +1918,7 @@ class GAEProxyHandler(AdvancedProxyHandler):
         need_crlf = 0 if common.GAE_MODE == 'https' else 1
         need_validate = common.GAE_VALIDATE
         cache_key = '%s:%d' % (common.HOSTS_POSTFIX_MAP['.appspot.com'], 443 if common.GAE_MODE == 'https' else 80)
-        response = self.create_http_request(request_method, fetchserver, request_headers, body, self.max_timeout, crlf=need_crlf, validate=need_validate, cache_key=cache_key)
+        response = self.create_http_request(request_method, fetchserver, request_headers, body, self.connect_timeout, crlf=need_crlf, validate=need_validate, cache_key=cache_key)
         response.app_status = response.status
         response.app_options = response.getheader('X-GOA-Options', '')
         if response.status != 200:
@@ -1994,7 +1997,7 @@ class PHPProxyHandler(AdvancedProxyHandler):
         fetchserver += '?%s' % random.random()
         crlf = 0
         cache_key = '%s//:%s' % urlparse.urlsplit(fetchserver)[:2]
-        response = self.create_http_request('POST', fetchserver, app_headers, app_body, self.max_timeout, crlf=crlf, cache_key=cache_key)
+        response = self.create_http_request('POST', fetchserver, app_headers, app_body, self.connect_timeout, crlf=crlf, cache_key=cache_key)
         if not response:
             raise socket.error(errno.ECONNRESET, 'urlfetch %r return None' % url)
         if response.status >= 400:
