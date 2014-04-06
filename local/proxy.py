@@ -851,7 +851,7 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                 if not headers_sent:
                     logging.info('%s "URLFETCH %s %s HTTP/1.1" %s %s', self.address_string(), method, url, response.status, response.getheader('Content-Length', '-'))
                     if response.status == 206:
-                        return RangeFetch(response, fetchservers, kwargs.get('password', '')).fetch()
+                        return RangeFetch(self, response, fetchservers, **kwargs).fetch()
                     if response.getheader('Set-Cookie'):
                         response.msg['Set-Cookie'] = self.normcookie(response.getheader('Set-Cookie'))
                     if response.getheader('Content-Disposition') and '"' not in response.getheader('Content-Disposition'):
@@ -888,11 +888,11 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                         response.close()
                         return
             except NetWorkIOError as e:
-                if e[0] in (errno.ECONNABORTED, errno.EPIPE) or 'bad write retry' in e.args[1]:
+                if e[0] in (errno.ECONNABORTED, errno.EPIPE) or 'bad write retry' in repr(e):
                     return
             except Exception as e:
                 errors.append(e)
-                logging.info('URLFETCH fetchserver=%r %r, retry...', fetchserver, e)
+                logging.exception('URLFETCH fetchserver=%r %r, retry...', fetchserver, e)
         if len(errors) == max_retry:
             content = message_html('502 URLFetch failed', 'Local URLFetch %r failed' % url, str(errors))
             return self.MOCK(502, {'Content-Type': 'text/html'}, content)
@@ -927,12 +927,12 @@ class RangeFetch(object):
     bufsize = 8192
     waitsize = 1024*512
 
-    def __init__(self, handler, response, fetchservers, password=''):
+    def __init__(self, handler, response, fetchservers, **kwargs):
         self.handler = handler
-        self.url = self.handler.url
+        self.url = handler.path
         self.response = response
         self.fetchservers = fetchservers
-        self.password = password
+        self.kwargs = kwargs
         self._stopped = None
         self._last_app_status = {}
 
@@ -952,7 +952,7 @@ class RangeFetch(object):
 
         logging.info('>>>>>>>>>>>>>>> RangeFetch started(%r) %d-%d', self.url, start, end)
         self.handler.send_response(response_status)
-        for key, value in response_headers:
+        for key, value in response_headers.items():
             self.handler.send_header(key, value)
         self.handler.end_headers()
 
@@ -1021,7 +1021,7 @@ class RangeFetch(object):
                         fetchserver = random.choice(self.fetchservers)
                         if self._last_app_status.get(fetchserver, 200) >= 500:
                             time.sleep(5)
-                        response = self.handler.create_http_request_withserver(fetchserver, self.handler.command, self.url, headers, self.handler.body, password=self.password)
+                        response = self.handler.create_http_request_withserver(fetchserver, self.handler.command, self.url, headers, self.handler.body, timeout=self.handler.max_timeout, **self.kwargs)
                 except Queue.Empty:
                     continue
                 except Exception as e:
