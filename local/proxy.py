@@ -1492,10 +1492,8 @@ class AdvancedProxyHandler(SimpleProxyHandler):
             while cache_key:
                 ctime, sock = self.tcp_connection_cache[cache_key].get_nowait()
                 if time.time() - ctime < 30:
-                    print ('hit !',hostname, port, cache_key)
                     return sock
         except Queue.Empty:
-            print ('miss !',hostname, port, cache_key)
             pass
         result = None
         addresses = [(x, port) for x in self.gethostbyname2(hostname)]
@@ -2417,17 +2415,14 @@ class PacFileFilter(BaseProxyHandlerFilter):
                 uptime = get_uptime()
                 if uptime and uptime > 1800:
                     thread.start_new_thread(lambda: os.utime(pacfile, (time.time(), time.time())) or PacUtil.update_pacfile(pacfile), tuple())
-            with open(pacfile, 'rb') as fp:
-                content = fp.read()
-                headers = {'Content-Type': 'text/plain', 'Connection': 'close'}
-                return [handler.MOCK, 200, headers, content]
 
 
 class StaticFileFilter(BaseProxyHandlerFilter):
     """static file filter"""
     def filter(self, handler):
-        if handler.command == 'GET' and handler.path.startswith('/'):
-            filename = '.' + handler.path
+        path = urlparse.urlsplit(handler.path).path
+        if handler.command == 'GET' and path.startswith('/'):
+            filename = '.' + path
             if os.path.isfile(filename):
                 with open(filename, 'rb') as fp:
                     content = fp.read()
