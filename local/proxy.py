@@ -1197,7 +1197,6 @@ class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
 class ProxyChainMixin:
     """proxy chain mixin"""
-    proxy = ''
 
     def gethostbyname2(self, hostname):
         try:
@@ -1206,12 +1205,12 @@ class ProxyChainMixin:
             return [hostname]
 
     def create_tcp_connection(self, hostname, port, timeout, **kwargs):
-        _, proxyuser, proxypass, proxyaddress = ProxyUtil.parse_proxy(self.proxy)
-        proxyhost, _, proxyport = proxyaddress.rpartition(':')
-        sock = socket.create_connection((proxyhost, int(proxyport)))
+        sock = socket.create_connection((common.PROXY_HOST, int(common.PROXY_PORT)))
+        if hostname.endswith('.appspot.com'):
+            hostname = 'www.google.com'
         request_data = 'CONNECT %s:%s HTTP/1.1\r\n' % (hostname, port)
-        if proxyuser and proxypass:
-            request_data += 'Proxy-authorization: Basic %s\r\n' % base64.b64encode(('%s:%s' % (proxyuser, proxypass)).encode()).decode().strip()
+        if common.PROXY_USERNAME and common.PROXY_PASSWROD:
+            request_data += 'Proxy-authorization: Basic %s\r\n' % base64.b64encode(('%s:%s' % (common.PROXY_USERNAME, common.PROXY_PASSWROD)).encode()).decode().strip()
         request_data += '\r\n'
         sock.sendall(request_data)
         response = httplib.HTTPResponse(sock, buffering=False)
@@ -1519,7 +1518,7 @@ class AdvancedProxyHandler(SimpleProxyHandler):
                         # only output first error
                         logging.warning('create_connection to %s return %r, try again.', addrs, result)
                     errors.append(result)
-            raise errors[-1]
+        raise errors[-1]
 
     def create_ssl_connection(self, hostname, port, timeout, **kwargs):
         cache_key = kwargs.get('cache_key')
@@ -1667,7 +1666,7 @@ class AdvancedProxyHandler(SimpleProxyHandler):
                         # only output first error
                         logging.warning('create_ssl_connection to %s return %r, try again.', addrs, result)
                 errors.append(result)
-            raise errors[-1]
+        raise errors[-1]
 
     def create_http_request(self, method, url, headers, body, timeout, realhost='', max_retry=3, bufsize=8192, crlf=None, validate=None, cache_key=None):
         scheme, netloc, path, query, _ = urlparse.urlsplit(url)
@@ -2367,6 +2366,15 @@ class PHPProxyHandler2(AdvancedProxyHandler):
             response.msg['Transfer-Encoding'] = transfer_encoding
         return response
 
+
+class ProxyChainGAEProxyHandler(ProxyChainMixin, GAEProxyHandler2):
+    pass
+
+
+class ProxyChainPHPProxyHandler(ProxyChainMixin, PHPProxyHandler2):
+    pass
+
+
 def get_uptime():
     if os.name == 'nt':
         import ctypes
@@ -2572,7 +2580,8 @@ def main():
 
     if common.PHP_ENABLE:
         host, port = common.PHP_LISTEN.split(':')
-        server = LocalProxyServer((host, int(port)), PHPProxyHandler2)
+        HandlerClass = PHPProxyHandler2 if not common.PROXY_ENABLE else ProxyChainPHPProxyHandler
+        server = LocalProxyServer((host, int(port)), HandlerClass)
         thread.start_new_thread(server.serve_forever, tuple())
 
     if common.PAC_ENABLE:
@@ -2590,7 +2599,8 @@ def main():
             logging.exception('GoAgent DNSServer requires dnslib and gevent 1.0')
             sys.exit(-1)
 
-    server = LocalProxyServer((common.LISTEN_IP, common.LISTEN_PORT), GAEProxyHandler2)
+    HandlerClass = GAEProxyHandler2 if not common.PROXY_ENABLE else ProxyChainGAEProxyHandler
+    server = LocalProxyServer((common.LISTEN_IP, common.LISTEN_PORT), HandlerClass)
     try:
         server.serve_forever()
     except SystemError as e:
